@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser"
@@ -17,10 +18,12 @@ import (
 
 var cliArgs struct {
 	ImportFilePath string
+	OutputFilePath string
 }
 
 func main() {
 	flag.StringVar(&cliArgs.ImportFilePath, "i", "", "mysql schema file")
+	flag.StringVar(&cliArgs.OutputFilePath, "o", "", "template output file")
 	flag.Parse()
 	if cliArgs.ImportFilePath == "" {
 		log.Fatal("mysql schema file should not empty")
@@ -30,6 +33,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("read schema file failed: %v", err)
 	}
+
+	out, err := os.OpenFile(cliArgs.OutputFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
+	if err != nil {
+		log.Fatalf("open output file failed: %v", err)
+	}
+	defer out.Close()
 
 	p := parser.New()
 	stmts, warns, err := p.Parse(string(sql), "", "")
@@ -52,7 +61,7 @@ func main() {
 		if err != nil {
 			log.Printf("restore error: %v", err)
 		}
-		fmt.Println(buf.String())
+		out.Write(buf.Bytes())
 	}
 }
 
@@ -72,19 +81,18 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 		ctx.WritePlain("(")
 		ctx.In.Write([]byte{'\n'})
 		for i, col := range n.Cols {
-			if i > 0 {
-				ctx.WritePlain(",")
-				ctx.In.Write([]byte{'\n'})
-				ctx.In.Write([]byte(genRange(col)))
-				ctx.In.Write([]byte{'\n'})
-			}
 			if err := col.Restore(ctx); err != nil {
 				return errors.Annotatef(err, "An error occurred while splicing CreateTableStmt ColumnDef: [%v]", i)
 			}
+			ctx.WritePlain(",")
+			ctx.In.Write([]byte{'\n'})
+			ctx.In.Write([]byte(genRange(col)))
+			if i != lenCols-1 || lenConstraints > 0 {
+				ctx.In.Write([]byte{'\n'})
+			}
 		}
 		for i, constraint := range n.Constraints {
-			if i > 0 || lenCols >= 1 {
-				ctx.WritePlain(",")
+			if i > 0 {
 				ctx.In.Write([]byte{'\n'})
 			}
 			if err := constraint.Restore(ctx); err != nil {
@@ -108,21 +116,32 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 			return errors.Annotate(err, "An error occurred while splicing CreateTableStmt Partition")
 		}
 	}
-	ctx.WritePlain(";")
+	ctx.WritePlain(";\n")
 	return nil
 }
 
 func genRange(col *ast.ColumnDef) string {
-	//map[1:1717 2:88 3:4837 4:1 5:33 7:2661 8:3286 10:229 11:11 12:749 15:8319 16:74 246:2149 250:2 251:47 252:241 254:228]
+	for _, opt := range col.Options {
+		switch opt.Tp {
+		case ast.ColumnOptionNotNull:
+			col.Tp.Flag |= mysql.NotNullFlag
+		case ast.ColumnOptionAutoIncrement:
+			col.Tp.Flag |= mysql.AutoIncrementFlag
+		}
+	}
+	if mysql.HasAutoIncrementFlag(col.Tp.Flag) {
+		return "{{ rownum }}"
+	}
+
 	switch col.Tp.Tp {
 	case mysql.TypeDecimal:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF)}}"
+		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
 	case mysql.TypeTiny:
-		return "{{ rand.range(1, 0xFF)}}"
+		return "{{ rand.range(1, 0xFF) }}"
 	case mysql.TypeShort:
-		return "{{ rand.range(1, 0xFFFF)}}"
+		return "{{ rand.range(1, 0xFFFF) }}"
 	case mysql.TypeLong:
-		return "{{ rand.range(1, 0xFFFFFFFF)}}"
+		return "{{ rand.range(1, 0xFFFFFFFF) }}"
 	case mysql.TypeFloat:
 		return "{{ rand.finite_f32() }}"
 	case mysql.TypeDouble:
@@ -132,9 +151,9 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeTimestamp:
 		return "{{ rand.u31_timestamp() }}"
 	case mysql.TypeLonglong:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF)}}"
+		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
 	case mysql.TypeInt24:
-		return "{{ rand.range(1, 0xFFFFFF)}}"
+		return "{{ rand.range(1, 0xFFFFFF) }}"
 	case mysql.TypeDate:
 		return "{{ TIMESTAMP '2016-01-02' }}"
 	case mysql.TypeDuration:
@@ -142,21 +161,21 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeDatetime:
 		return "{{ rand.u31_timestamp() }}"
 	case mysql.TypeYear:
-		return "{{ rand.range(1970, 2200)}}"
+		return "{{ rand.range(1970, 2200) }}"
 	case mysql.TypeNewDate:
 		return "{{ TIMESTAMP '2016-01-02' }}"
 	case mysql.TypeBit:
-		return "{{ rand.range_inclusive(0, 1)}}"
+		return "{{ rand.range_inclusive(0, 1) }}"
 	case mysql.TypeNewDecimal:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF)}}"
+		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
 	case mysql.TypeEnum:
 		return unimplemented()
 	case mysql.TypeTinyBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 100) "
+		return "{{ rand.regex('[0-9a-z]+', 'i', 100) }}"
 	case mysql.TypeMediumBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 32600) "
+		return "{{ rand.regex('[0-9a-z]+', 'i', 32600) }}"
 	case mysql.TypeLongBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 1000000) "
+		return "{{ rand.regex('[0-9a-z]+', 'i', 1000000) }}"
 	case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
 		return fmt.Sprintf("{{ rand.regex('[0-9a-z]+', 'i', %d) }}", col.Tp.Flen)
 	default:
