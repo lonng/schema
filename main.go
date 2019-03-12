@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 
 	"github.com/pingcap/errors"
@@ -133,15 +134,28 @@ func genRange(col *ast.ColumnDef) string {
 		return "{{ rownum }}"
 	}
 
+	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.Tp.Tp)
+	flen := col.Tp.Flen
+	if flen <= 0 {
+		flen = defaultFlen
+	}
+	dec := col.Tp.Decimal
+	if dec <= 0 {
+		dec = defaultDecimal
+	}
+
 	switch col.Tp.Tp {
 	case mysql.TypeDecimal:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
+		return unimplemented()
 	case mysql.TypeTiny:
-		return "{{ rand.range(1, 0xFF) }}"
+		max := math.Min(math.Pow10(flen)-1, 0xff)
+		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeShort:
-		return "{{ rand.range(1, 0xFFFF) }}"
+		max := math.Min(math.Pow10(flen)-1, 0xffff)
+		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeLong:
-		return "{{ rand.range(1, 0xFFFFFFFF) }}"
+		max := math.Min(math.Pow10(flen)-1, 0xffffffff)
+		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeFloat:
 		return "{{ rand.finite_f32() }}"
 	case mysql.TypeDouble:
@@ -151,9 +165,11 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeTimestamp:
 		return "{{ rand.u31_timestamp() }}"
 	case mysql.TypeLonglong:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
+		max := math.Min(math.Pow10(flen)-1, 0xfffffffffffff800) // avoid dealing with float -> int rounding
+		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeInt24:
-		return "{{ rand.range(1, 0xFFFFFF) }}"
+		max := math.Min(math.Pow10(flen)-1, 0xffffff)
+		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeDate:
 		return "{{ TIMESTAMP '2016-01-02' }}"
 	case mysql.TypeDuration:
@@ -167,7 +183,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeBit:
 		return "{{ rand.range_inclusive(0, 1) }}"
 	case mysql.TypeNewDecimal:
-		return "{{ rand.range(1, 0xFFFFFFFFFFFFFFFF) }}"
+		return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen, dec)
 	case mysql.TypeEnum:
 		return unimplemented()
 	case mysql.TypeTinyBlob:
@@ -177,7 +193,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeLongBlob:
 		return "{{ rand.regex('[0-9a-z]+', 'i', 1000000) }}"
 	case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
-		return fmt.Sprintf("{{ rand.regex('[0-9a-z]+', 'i', %d) }}", col.Tp.Flen)
+		return fmt.Sprintf("{{ rand.regex('[0-9a-z]{%d}', 'i') }}", flen)
 	default:
 		return unimplemented()
 	}
