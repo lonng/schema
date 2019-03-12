@@ -84,15 +84,15 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 			if err := col.Restore(ctx); err != nil {
 				return errors.Annotatef(err, "An error occurred while splicing CreateTableStmt ColumnDef: [%v]", i)
 			}
-			ctx.WritePlain(",")
-			ctx.In.Write([]byte{'\n'})
-			ctx.In.Write([]byte(genRange(col)))
+			ctx.In.Write([]byte(" " + genRange(col)))
 			if i != lenCols-1 || lenConstraints > 0 {
+				ctx.WritePlain(",")
 				ctx.In.Write([]byte{'\n'})
 			}
 		}
 		for i, constraint := range n.Constraints {
 			if i > 0 {
+				ctx.WritePlain(",")
 				ctx.In.Write([]byte{'\n'})
 			}
 			if err := constraint.Restore(ctx); err != nil {
