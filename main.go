@@ -131,20 +131,25 @@ func main() {
 				rowSize += displayFlen
 			}
 		}
+		const MB = 1 << 20
 		rowCount := 100
-		insertCount := 1000
+		insertCount := int64(10 * MB / (100 * rowSize))
+		if insertCount == 0 {
+			insertCount = 1
+		}
 		tableSize, found := tableSizeStats[createTable.Table.Name.O]
 		if !found {
-			// 20M - 1G
-			tableSize = 1<<20*20 + rand.Int63n(1<<30)
+			// 20M - 512M
+			tableSize = 1<<20*20 + rand.Int63n(512<<20)
 			log.Printf("table %v size not define, generate random size: %d\n", createTable.Table.Name.O, tableSize)
 		}
-		filesCount := tableSize / 100 / 1000 / int64(rowSize)
+		tableSize = 10 * MB
+		filesCount := tableSize / 100 / insertCount / int64(rowSize)
 		if filesCount < 1 {
 			filesCount = 1
 		}
 		fmt.Fprintf(out, "echo 'TABLE: %s'\n", createTable.Table.Name.O)
-		fmt.Fprintf(out, "dbgen -i /dev/stdin -o . -t db1903_baofu.%s -n %d -r %d -k %d -j 40 --escape-backslash --time-zone Asia/Shanghai <<'SCHEMAEOF'\n",
+		fmt.Fprintf(out, "dbgen -i /dev/stdin -o . -t 'db1903_baofu.`%s`' -n %d -r %d -k %d -j 40 --escape-backslash --time-zone Asia/Shanghai <<'SCHEMAEOF'\n",
 			createTable.Table.Name.O, insertCount, rowCount, filesCount)
 		buf := &bytes.Buffer{}
 		ctx := format.NewRestoreCtx(format.DefaultRestoreFlags, buf)
