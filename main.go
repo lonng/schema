@@ -86,7 +86,10 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 				return errors.Annotatef(err, "An error occurred while splicing CreateTableStmt ColumnDef: [%v]", i)
 			}
 			for _, cons := range n.Constraints {
-				if cons.Tp == ast.ConstraintPrimaryKey {
+				if cons.Tp == ast.ConstraintPrimaryKey ||
+					cons.Tp == ast.ConstraintUniqIndex ||
+					cons.Tp == ast.ConstraintUniqKey ||
+					cons.Tp == ast.ConstraintUniq {
 					for _, indexCol := range cons.Keys {
 						if indexCol.Column.Name.L == col.Name.Name.L {
 							col.Tp.Flag |= mysql.PriKeyFlag
