@@ -148,13 +148,13 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeDecimal:
 		return unimplemented()
 	case mysql.TypeTiny:
-		max := math.Min(math.Pow10(flen)-1, 0xff)
+		max := math.Min(math.Pow10(flen)-1, 0x7f)
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeShort:
-		max := math.Min(math.Pow10(flen)-1, 0xffff)
+		max := math.Min(math.Pow10(flen)-1, 0x7fff)
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeLong:
-		max := math.Min(math.Pow10(flen)-1, 0xffffffff)
+		max := math.Min(math.Pow10(flen)-1, 0x7fffffff)
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeFloat:
 		return "{{ rand.finite_f32() }}"
@@ -165,10 +165,10 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeTimestamp:
 		return "{{ rand.u31_timestamp() }}"
 	case mysql.TypeLonglong:
-		max := math.Min(math.Pow10(flen)-1, 0xfffffffffffff800) // avoid dealing with float -> int rounding
+		max := math.Min(math.Pow10(flen)-1, 0x7ffffffffffff800) // avoid dealing with float -> int rounding
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeInt24:
-		max := math.Min(math.Pow10(flen)-1, 0xffffff)
+		max := math.Min(math.Pow10(flen)-1, 0x7fffff)
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeDate:
 		return "{{ TIMESTAMP '2016-01-02' }}"
@@ -187,13 +187,13 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeEnum:
 		return unimplemented()
 	case mysql.TypeTinyBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 100) }}"
+		return "{{ rand.regex('[0-9a-zA-Z]{1,100}') }}"
 	case mysql.TypeMediumBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 32600) }}"
+		return "{{ rand.regex('[0-9a-zA-Z]{1,200}') }}"
 	case mysql.TypeLongBlob:
-		return "{{ rand.regex('[0-9a-z]+', 'i', 1000000) }}"
+		return "{{ rand.regex('[0-9a-zA-Z]{1,300}) }}"
 	case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
-		return fmt.Sprintf("{{ rand.regex('[0-9a-z]{%d}', 'i') }}", flen)
+		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", flen)
 	default:
 		return unimplemented()
 	}
