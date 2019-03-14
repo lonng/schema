@@ -85,6 +85,15 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 			if err := col.Restore(ctx); err != nil {
 				return errors.Annotatef(err, "An error occurred while splicing CreateTableStmt ColumnDef: [%v]", i)
 			}
+			for _, cons := range n.Constraints {
+				if cons.Tp == ast.ConstraintPrimaryKey {
+					for _, indexCol := range cons.Keys {
+						if indexCol.Column.Name.L == col.Name.Name.L {
+							col.Tp.Flag |= mysql.PriKeyFlag
+						}
+					}
+				}
+			}
 			ctx.In.Write([]byte(" " + genRange(col)))
 			if i != lenCols-1 || lenConstraints > 0 {
 				ctx.WritePlain(",")
@@ -130,7 +139,7 @@ func genRange(col *ast.ColumnDef) string {
 			col.Tp.Flag |= mysql.AutoIncrementFlag
 		}
 	}
-	if mysql.HasAutoIncrementFlag(col.Tp.Flag) {
+	if mysql.HasAutoIncrementFlag(col.Tp.Flag) || mysql.HasPriKeyFlag(col.Tp.Flag) {
 		return "{{ rownum }}"
 	}
 
