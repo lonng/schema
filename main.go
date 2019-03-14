@@ -183,7 +183,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeBit:
 		return "{{ rand.range_inclusive(0, 1) }}"
 	case mysql.TypeNewDecimal:
-		return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen, dec)
+		return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen-dec, dec)
 	case mysql.TypeEnum:
 		return unimplemented()
 	case mysql.TypeTinyBlob:
