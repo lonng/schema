@@ -171,7 +171,7 @@ func genRange(col *ast.ColumnDef) string {
 		max := math.Min(math.Pow10(flen)-1, 0x7fffff)
 		return fmt.Sprintf("{{ rand.range_inclusive(0, %.0f) }}", max)
 	case mysql.TypeDate:
-		return "{{ TIMESTAMP '2016-01-02' }}"
+		return "{{ TIMESTAMP '2016-01-02 15:04:05' }}"
 	case mysql.TypeDuration:
 		return "{{ INTERVAL 30 DAY }}"
 	case mysql.TypeDatetime:
@@ -191,7 +191,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeMediumBlob:
 		return "{{ rand.regex('[0-9a-zA-Z]{1,200}') }}"
 	case mysql.TypeLongBlob:
-		return "{{ rand.regex('[0-9a-zA-Z]{1,300}) }}"
+		return "{{ rand.regex('[0-9a-zA-Z]{1,300}') }}"
 	case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
 		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", flen)
 	default:
