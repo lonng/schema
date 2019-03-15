@@ -115,6 +115,27 @@ func main() {
 
 		var rowSize int
 		for _, col := range createTable.Cols {
+			for _, opt := range col.Options {
+				switch opt.Tp {
+				case ast.ColumnOptionNotNull:
+					col.Tp.Flag |= mysql.NotNullFlag
+				case ast.ColumnOptionAutoIncrement:
+					col.Tp.Flag |= mysql.AutoIncrementFlag
+				}
+			}
+			for _, cons := range createTable.Constraints {
+				if cons.Tp == ast.ConstraintPrimaryKey ||
+					cons.Tp == ast.ConstraintUniqIndex ||
+					cons.Tp == ast.ConstraintUniqKey ||
+					cons.Tp == ast.ConstraintUniq {
+					for _, indexCol := range cons.Keys {
+						if indexCol.Column.Name.L == col.Name.Name.L {
+							col.Tp.Flag |= mysql.PriKeyFlag
+						}
+					}
+				}
+			}
+
 			ft := col.Tp
 			defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(ft.Tp)
 			// displayFlen and displayDecimal are flen and decimal values with `-1` substituted with default value.
@@ -125,7 +146,9 @@ func main() {
 			if displayDecimal == 0 || displayDecimal == types.UnspecifiedLength {
 				displayDecimal = defaultDecimal
 			}
-			if ft.Tp == mysql.TypeDecimal || ft.Tp == mysql.TypeNewDecimal {
+			if mysql.HasAutoIncrementFlag(col.Tp.Flag) || mysql.HasPriKeyFlag(col.Tp.Flag) {
+				rowSize += 8 // rownum is bigint
+			} else if ft.Tp == mysql.TypeDecimal || ft.Tp == mysql.TypeNewDecimal {
 				rowSize += displayFlen + displayDecimal
 			} else {
 				rowSize += displayFlen
@@ -133,7 +156,7 @@ func main() {
 		}
 		const MB = 1 << 20
 		rowCount := 100
-		insertCount := int64(10 * MB / (100 * rowSize))
+		insertCount := int64(256 * MB / (100 * rowSize))
 		if insertCount == 0 {
 			insertCount = 1
 		}
@@ -143,12 +166,12 @@ func main() {
 			tableSize = 1<<20*20 + rand.Int63n(512<<20)
 			log.Printf("table %v size not define, generate random size: %d\n", createTable.Table.Name.O, tableSize)
 		}
-		tableSize = 10 * MB
 		filesCount := tableSize / 100 / insertCount / int64(rowSize)
 		if filesCount < 1 {
 			filesCount = 1
 		}
-		fmt.Fprintf(out, "echo 'TABLE: %s'\n", createTable.Table.Name.O)
+		fmt.Fprintf(out, "echo 'TABLE: %s, rowSize: %d insertCount: %v, tableSize: %v, filesCount:%v'\n",
+			createTable.Table.Name.O, rowSize, insertCount, tableSize, filesCount)
 		fmt.Fprintf(out, "dbgen -i /dev/stdin -o . -t 'db1903_baofu.`%s`' -n %d -r %d -k %d -j 40 --escape-backslash --time-zone Asia/Shanghai <<'SCHEMAEOF'\n",
 			createTable.Table.Name.O, insertCount, rowCount, filesCount)
 		buf := &bytes.Buffer{}
@@ -173,18 +196,6 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 		for i, col := range n.Cols {
 			if err := col.Restore(ctx); err != nil {
 				return errors.Annotatef(err, "An error occurred while splicing CreateTableStmt ColumnDef: [%v]", i)
-			}
-			for _, cons := range n.Constraints {
-				if cons.Tp == ast.ConstraintPrimaryKey ||
-					cons.Tp == ast.ConstraintUniqIndex ||
-					cons.Tp == ast.ConstraintUniqKey ||
-					cons.Tp == ast.ConstraintUniq {
-					for _, indexCol := range cons.Keys {
-						if indexCol.Column.Name.L == col.Name.Name.L {
-							col.Tp.Flag |= mysql.PriKeyFlag
-						}
-					}
-				}
 			}
 			ctx.In.Write([]byte(" " + genRange(col)))
 			if i != lenCols-1 || lenConstraints > 0 {
@@ -223,14 +234,6 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 }
 
 func genRange(col *ast.ColumnDef) string {
-	for _, opt := range col.Options {
-		switch opt.Tp {
-		case ast.ColumnOptionNotNull:
-			col.Tp.Flag |= mysql.NotNullFlag
-		case ast.ColumnOptionAutoIncrement:
-			col.Tp.Flag |= mysql.AutoIncrementFlag
-		}
-	}
 	if mysql.HasAutoIncrementFlag(col.Tp.Flag) || mysql.HasPriKeyFlag(col.Tp.Flag) {
 		return "{{ rownum }}"
 	}
