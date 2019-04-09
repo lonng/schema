@@ -36,6 +36,7 @@ var cliArgs struct {
 	ImportFilePath string
 	OutputFilePath string
 	TableSizeFile  string
+	Test           bool
 }
 
 var sizeMapper = []struct {
@@ -53,6 +54,7 @@ func main() {
 	flag.StringVar(&cliArgs.ImportFilePath, "i", "", "mysql schema file")
 	flag.StringVar(&cliArgs.OutputFilePath, "o", "", "template output file")
 	flag.StringVar(&cliArgs.TableSizeFile, "size", "", "table size")
+	flag.BoolVar(&cliArgs.Test, "test", false, "generate test template")
 	flag.Parse()
 	if cliArgs.ImportFilePath == "" {
 		log.Fatal("mysql schema file should not empty")
@@ -137,12 +139,7 @@ CreateTable:
 
 		var rowSize int
 		for _, col := range createTable.Cols {
-			if col.Tp.Tp == mysql.TypeTimestamp ||
-				col.Tp.Tp == mysql.TypeDatetime ||
-				col.Tp.Tp == mysql.TypeDate ||
-				col.Tp.Tp == mysql.TypeDuration {
-				continue
-			}
+
 			for _, opt := range col.Options {
 				switch opt.Tp {
 				case ast.ColumnOptionNotNull:
@@ -223,8 +220,10 @@ CreateTable:
 		}
 
 		// for test
-		tableSize = 3 * MB
-		insertCount = 1
+		if cliArgs.Test {
+			tableSize = 3 * MB
+			insertCount = 1
+		}
 
 		filesCount := tableSize / insertCount / int64(rowCount*rowSize)
 		if filesCount < 1 {
@@ -295,7 +294,16 @@ func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
 
 func genRange(col *ast.ColumnDef) string {
 	if mysql.HasAutoIncrementFlag(col.Tp.Flag) || mysql.HasPriKeyFlag(col.Tp.Flag) {
-		return "{{ rownum }}"
+		switch col.Tp.Tp {
+		case mysql.TypeTimestamp, mysql.TypeDatetime:
+			return "{{ timestamp '2000-01-01 00:00:00' + interval rownum second }}"
+		case mysql.TypeDuration:
+			return "{{ timestamp '00:00:00' + interval rownum second }}"
+		case mysql.TypeDate:
+			return "{{ timestamp '1000-01-01' + interval rownum second }}"
+		default:
+			return "{{ rownum }}"
+		}
 	}
 
 	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.Tp.Tp)
@@ -323,7 +331,11 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeFloat:
 		return "{{ rand.finite_f32() }}"
 	case mysql.TypeDouble:
-		return "{{ rand.finite_f64() }}"
+		if dec < 0 {
+			return "{{ rand.finite_f64() }}"
+		} else {
+			return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen-dec, dec)
+		}
 	case mysql.TypeNull:
 		return "{{ NULL }}"
 	case mysql.TypeTimestamp:
@@ -345,7 +357,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeNewDate:
 		return "{{ TIMESTAMP '2016-01-02' }}"
 	case mysql.TypeBit:
-		return "{{ rand.range_inclusive(0, 1) }}"
+		return `{{ rand.regex('[\u{0}\u{1}]') }}`
 	case mysql.TypeNewDecimal:
 		return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen-dec, dec)
 	case mysql.TypeEnum:
