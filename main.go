@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser"
@@ -20,6 +21,16 @@ import (
 	"github.com/pingcap/parser/types"
 	_ "github.com/pingcap/tidb/types/parser_driver"
 )
+
+const (
+	sizeTinyBlob   = 100
+	sizeMediumBlob = 200
+	sizeLongBlob   = 200
+)
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 var cliArgs struct {
 	ImportFilePath string
@@ -103,9 +114,14 @@ func main() {
 		log.Println("warn: " + w.Error())
 	}
 
+	tableCountStats := map[string]int{}
+
 	// shell header
 	fmt.Fprintln(out, "#!/bin/sh")
+	fmt.Fprintf(out, "echo 'GENERATED AT %s'\n", time.Now().String())
 	fmt.Fprintln(out, "echo 'CREATE SCHEMA 'db1903_baofu';' > db1903_baofu-schema-create.sql")
+
+CreateTable:
 	for _, stmt := range stmts {
 		createTable, ok := stmt.(*ast.CreateTableStmt)
 		if !ok {
@@ -113,8 +129,20 @@ func main() {
 			continue
 		}
 
+		tableCountStats[createTable.Table.Name.L]++
+		if tableCountStats[createTable.Table.Name.L] > 1 {
+			log.Printf("duplicated table: %s, found: %d\n", createTable.Table.Name.L, tableCountStats[createTable.Table.Name.L])
+			continue
+		}
+
 		var rowSize int
 		for _, col := range createTable.Cols {
+			if col.Tp.Tp == mysql.TypeTimestamp ||
+				col.Tp.Tp == mysql.TypeDatetime ||
+				col.Tp.Tp == mysql.TypeDate ||
+				col.Tp.Tp == mysql.TypeDuration {
+				continue
+			}
 			for _, opt := range col.Options {
 				switch opt.Tp {
 				case ast.ColumnOptionNotNull:
@@ -137,14 +165,38 @@ func main() {
 			}
 
 			ft := col.Tp
-			defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(ft.Tp)
-			// displayFlen and displayDecimal are flen and decimal values with `-1` substituted with default value.
-			displayFlen, displayDecimal := ft.Flen, ft.Decimal
-			if displayFlen == 0 || displayFlen == types.UnspecifiedLength {
-				displayFlen = defaultFlen
+			if createTable.Table.Name.L == "sysdiagrams" {
+				log.Println(fmt.Sprintf("%+v", ft))
 			}
-			if displayDecimal == 0 || displayDecimal == types.UnspecifiedLength {
-				displayDecimal = defaultDecimal
+
+			// Will skip tables which primary key is Tinyint or Short because of small table
+			// maybe cause primary key deplicate in generated data
+			if (ft.Tp == mysql.TypeTiny || ft.Tp == mysql.TypeShort) &&
+				(mysql.HasAutoIncrementFlag(ft.Flag) || mysql.HasPriKeyFlag(ft.Flag)) {
+				log.Printf("Skip table %s because of its primary key was tinyint or short: %s\n", createTable.Table.Name.L, ft.Tp)
+				continue CreateTable
+			}
+
+			var displayFlen, displayDecimal int
+			switch ft.Tp {
+			case mysql.TypeTinyBlob:
+				displayFlen = sizeTinyBlob
+			case mysql.TypeMediumBlob:
+				displayFlen = sizeMediumBlob
+			case mysql.TypeLongBlob:
+				displayFlen = sizeLongBlob
+			default:
+				defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(ft.Tp)
+				// displayFlen and displayDecimal are flen and decimal values with `-1` substituted with default value.
+				displayFlen, displayDecimal = ft.Flen, ft.Decimal
+				if displayFlen == 0 || displayFlen == types.UnspecifiedLength {
+					ft.Flen = defaultFlen
+					displayFlen = defaultFlen
+				}
+				if displayDecimal == 0 || displayDecimal == types.UnspecifiedLength {
+					ft.Decimal = defaultDecimal
+					displayDecimal = defaultDecimal
+				}
 			}
 			if mysql.HasAutoIncrementFlag(col.Tp.Flag) || mysql.HasPriKeyFlag(col.Tp.Flag) {
 				rowSize += 8 // rownum is bigint
@@ -155,18 +207,26 @@ func main() {
 			}
 		}
 		const MB = 1 << 20
-		rowCount := 100
-		insertCount := int64(256 * MB / (100 * rowSize))
+		const FileSize = 256 * MB
+		const rowCount = 100
+		const RndMin = 20 * MB
+		const RndRng = 512 * MB
+		tableSize, found := tableSizeStats[createTable.Table.Name.O]
+		if !found {
+			tableSize = RndMin + rand.Int63n(RndRng)
+			log.Printf("table %v size not define, generate random size: %d\n", createTable.Table.Name.O, tableSize)
+		}
+
+		insertCount := int64(FileSize / (rowCount * rowSize))
 		if insertCount == 0 {
 			insertCount = 1
 		}
-		tableSize, found := tableSizeStats[createTable.Table.Name.O]
-		if !found {
-			// 20M - 512M
-			tableSize = 1<<20*20 + rand.Int63n(512<<20)
-			log.Printf("table %v size not define, generate random size: %d\n", createTable.Table.Name.O, tableSize)
-		}
-		filesCount := tableSize / 100 / insertCount / int64(rowSize)
+
+		// for test
+		tableSize = 3 * MB
+		insertCount = 1
+
+		filesCount := tableSize / insertCount / int64(rowCount*rowSize)
 		if filesCount < 1 {
 			filesCount = 1
 		}
@@ -277,7 +337,7 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeDate:
 		return "{{ TIMESTAMP '2016-01-02 15:04:05' }}"
 	case mysql.TypeDuration:
-		return "{{ INTERVAL 30 DAY }}"
+		return "{{ TIMESTAMP '15:04:05' }}"
 	case mysql.TypeDatetime:
 		return "{{ rand.u31_timestamp() }}"
 	case mysql.TypeYear:
@@ -291,11 +351,11 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeEnum:
 		return unimplemented()
 	case mysql.TypeTinyBlob:
-		return "{{ rand.regex('[0-9a-zA-Z]{1,100}') }}"
+		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", sizeTinyBlob)
 	case mysql.TypeMediumBlob:
-		return "{{ rand.regex('[0-9a-zA-Z]{1,200}') }}"
+		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", sizeMediumBlob)
 	case mysql.TypeLongBlob:
-		return "{{ rand.regex('[0-9a-zA-Z]{1,300}') }}"
+		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", sizeLongBlob)
 	case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
 		return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", flen)
 	default:
