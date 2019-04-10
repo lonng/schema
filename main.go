@@ -124,6 +124,8 @@ func main() {
 	fmt.Fprintln(out, "echo 'CREATE SCHEMA 'db1903_baofu';' > db1903_baofu-schema-create.sql")
 
 	var restoreTableCount int
+
+CreateTable:
 	for _, stmt := range stmts {
 		createTable, ok := stmt.(*ast.CreateTableStmt)
 		if !ok {
@@ -143,7 +145,20 @@ func main() {
 			ft := col.Tp
 			// Will skip tables which primary key is Tinyint or Short because of small table
 			// maybe cause primary key deplicate in generated data
-			if ft.Tp == mysql.TypeTiny || ft.Tp == mysql.TypeShort {
+			isSkipColumn := ft.Tp == mysql.TypeTiny || ft.Tp == mysql.TypeShort ||
+				(ft.Tp == mysql.TypeVarchar && ft.Flen < 20) || (ft.Tp == mysql.TypeString && ft.Flen < 20)
+			for _, cons := range createTable.Constraints {
+				if cons.Tp != ast.ConstraintPrimaryKey {
+					continue
+				}
+				if len(cons.Keys) == 1 && cons.Keys[0].Column.Name.L == col.Name.Name.L && isSkipColumn {
+					// Skip the table
+					continue CreateTable
+				}
+			}
+
+			// Skip the column
+			if isSkipColumn {
 				continue
 			}
 			for _, opt := range col.Options {
