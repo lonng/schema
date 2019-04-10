@@ -123,7 +123,7 @@ func main() {
 	fmt.Fprintf(out, "echo 'GENERATED AT %s'\n", time.Now().String())
 	fmt.Fprintln(out, "echo 'CREATE SCHEMA 'db1903_baofu';' > db1903_baofu-schema-create.sql")
 
-CreateTable:
+	var restoreTableCount int
 	for _, stmt := range stmts {
 		createTable, ok := stmt.(*ast.CreateTableStmt)
 		if !ok {
@@ -138,8 +138,14 @@ CreateTable:
 		}
 
 		var rowSize int
+		var foundPK bool
 		for _, col := range createTable.Cols {
-
+			ft := col.Tp
+			// Will skip tables which primary key is Tinyint or Short because of small table
+			// maybe cause primary key deplicate in generated data
+			if ft.Tp == mysql.TypeTiny || ft.Tp == mysql.TypeShort {
+				continue
+			}
 			for _, opt := range col.Options {
 				switch opt.Tp {
 				case ast.ColumnOptionNotNull:
@@ -156,22 +162,10 @@ CreateTable:
 					for _, indexCol := range cons.Keys {
 						if indexCol.Column.Name.L == col.Name.Name.L {
 							col.Tp.Flag |= mysql.PriKeyFlag
+							foundPK = true
 						}
 					}
 				}
-			}
-
-			ft := col.Tp
-			if createTable.Table.Name.L == "sysdiagrams" {
-				log.Println(fmt.Sprintf("%+v", ft))
-			}
-
-			// Will skip tables which primary key is Tinyint or Short because of small table
-			// maybe cause primary key deplicate in generated data
-			if (ft.Tp == mysql.TypeTiny || ft.Tp == mysql.TypeShort) &&
-				(mysql.HasAutoIncrementFlag(ft.Flag) || mysql.HasPriKeyFlag(ft.Flag)) {
-				log.Printf("Skip table %s because of its primary key was tinyint or short: %s\n", createTable.Table.Name.L, ft.Tp)
-				continue CreateTable
 			}
 
 			var displayFlen, displayDecimal int
@@ -203,6 +197,13 @@ CreateTable:
 				rowSize += displayFlen
 			}
 		}
+
+		if !foundPK {
+			log.Printf("Skip table %s because of the table primary key not found\n", createTable.Table.Name.L)
+			_ = createTable.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, os.Stderr))
+			continue
+		}
+
 		const MB = 1 << 20
 		const FileSize = 256 * MB
 		const rowCount = 100
@@ -214,6 +215,10 @@ CreateTable:
 			log.Printf("table %v size not define, generate random size: %d\n", createTable.Table.Name.O, tableSize)
 		}
 
+		if rowSize == 0 {
+			log.Println("Skip rowsize 0 table", createTable.Table.Name.L)
+			continue
+		}
 		insertCount := int64(FileSize / (rowCount * rowSize))
 		if insertCount == 0 {
 			insertCount = 1
@@ -241,7 +246,10 @@ CreateTable:
 		}
 		out.Write(buf.Bytes())
 		fmt.Fprintln(out, "SCHEMAEOF")
+
+		restoreTableCount++
 	}
+	log.Println("Restore table count", restoreTableCount)
 }
 
 func restore(ctx *format.RestoreCtx, n *ast.CreateTableStmt) error {
@@ -301,6 +309,11 @@ func genRange(col *ast.ColumnDef) string {
 			return "{{ timestamp '00:00:00' + interval rownum second }}"
 		case mysql.TypeDate:
 			return "{{ timestamp '1000-01-01' + interval rownum second }}"
+		case mysql.TypeVarchar, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
+			if col.Tp.Flen < 8 {
+				return fmt.Sprintf("{{ rand.regex('[0-9a-zA-Z]{1,%d}') }}", col.Tp.Flen)
+			}
+			fallthrough
 		default:
 			return "{{ rownum }}"
 		}
@@ -359,6 +372,10 @@ func genRange(col *ast.ColumnDef) string {
 	case mysql.TypeBit:
 		return `{{ rand.regex('[\u{0}\u{1}]') }}`
 	case mysql.TypeNewDecimal:
+		// TODO: parser bug
+		if dec == 0 {
+			flen = defaultFlen
+		}
 		return fmt.Sprintf("{{ rand.regex('[0-9]{%d}\\.[0-9]{%d}') }}", flen-dec, dec)
 	case mysql.TypeEnum:
 		return unimplemented()
