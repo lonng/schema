@@ -8,5 +8,5 @@ require (
 	github.com/pingcap/parser v0.0.0-20190305083139-b478256a6451
 	github.com/pingcap/tidb v0.0.0-20190310150825-3045359b4e38
 	github.com/pingcap/tipb v0.0.0-20190226124958-833c2ffd2fe7 // indirect
-	github.com/sirupsen/logrus v1.3.0 // indirect
+	github.com/sirupsen/logrus v1.8.3 // indirect
 )
